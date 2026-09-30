@@ -892,6 +892,9 @@ class Submit : public Expr {
   // ``sync_start_``) because it is user-authored launch intent, not compiler
   // metadata; it carries no SSA value so passes need not walk it.
   bool allow_early_resolve_ = false;
+
+  std::optional<uint8_t> aicpu_cluster_id_ = std::nullopt;
+
   std::vector<std::pair<std::string, std::any>> attrs_;   // Compiler-internal metadata (ordered)
   std::vector<std::pair<std::string, std::any>> kwargs_;  // Keyword arguments (metadata, ordered)
 
@@ -903,6 +906,7 @@ class Submit : public Expr {
         op_(std::move(op)),
         args_(std::move(args)),
         deps_(std::move(deps)),
+        aicpu_cluster_id_(1),
         attrs_(),
         kwargs_() {}
 
@@ -921,7 +925,8 @@ class Submit : public Expr {
          std::vector<std::pair<std::string, std::any>> kwargs,
          std::vector<std::pair<std::string, std::any>> attrs, TypePtr type, Span span,
          std::optional<ExprPtr> core_num = std::nullopt, bool sync_start = false,
-         bool allow_early_resolve = false)
+         bool allow_early_resolve = false,
+         std::optional<uint8_t> aicpu_cluster_id = std::nullopt)
       : Expr(std::move(span), std::move(type)),
         op_(std::move(op)),
         args_(std::move(args)),
@@ -929,6 +934,7 @@ class Submit : public Expr {
         core_num_(std::move(core_num)),
         sync_start_(sync_start),
         allow_early_resolve_(allow_early_resolve),
+        aicpu_cluster_id_(aicpu_cluster_id),
         attrs_(std::move(attrs)),
         kwargs_(std::move(kwargs)) {
     ValidateArgDirectionsAttr();
@@ -991,6 +997,7 @@ class Submit : public Expr {
                         reflection::UsualField(&Submit::core_num_, "core_num"),
                         reflection::UsualField(&Submit::sync_start_, "sync_start"),
                         reflection::UsualField(&Submit::allow_early_resolve_, "allow_early_resolve"),
+                        reflection::UsualField(&Submit::aicpu_cluster_id_, "aicpu_cluster_id"),
                         reflection::UsualField(&Submit::attrs_, "attrs"),
                         reflection::UsualField(&Submit::kwargs_, "kwargs")));
   }
@@ -1110,6 +1117,9 @@ inline CallPtr SubmitToCallView(const SubmitPtr& submit) {
   // emit when set so a plain submit's Call view keeps its existing attrs.
   if (submit->allow_early_resolve_) {
     attrs.emplace_back("allow_early_resolve", std::any(true));
+  }
+  if (submit->aicpu_cluster_id_.has_value()) {
+    attrs.emplace_back("aicpu_cluster_id", std::any(submit->aicpu_cluster_id_.value()));
   }
   return std::make_shared<Call>(submit->op_, submit->args_, submit->kwargs_, std::move(attrs),
                                 submit->GetType(), submit->span_);

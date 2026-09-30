@@ -24,10 +24,14 @@ struct TaskBlock {
     std::unordered_set<size_t> predecessors;
     std::unordered_set<size_t> successors;
     double rank_u = -1.0;
+    uint8_t cluster_id = 255;
 };
 
 class HeftSchedulerMutator : public IRMutator {
 public:
+    int num_clusters_;
+    
+    explicit HeftSchedulerMutator(int num_clusters = 2) : num_clusters_(num_clusters) {}
     StmtPtr VisitStmt_(const SeqStmtsPtr& op) override {
         auto mutated_stmt = IRMutator::VisitStmt_(op);
         auto seq = As<SeqStmts>(mutated_stmt);
@@ -179,16 +183,58 @@ public:
             }
         }
 
+        std::vector<double> cluster_load(3, 0.0);
+        
+        for (size_t task_idx : new_order) {
+            auto& tb = tasks[task_idx];
+            if (tb.kernel_name == "assign" || tb.kernel_name == "non_assign") continue;
+
+            uint8_t best_cluster = 255;
+
+            if (!tb.predecessors.empty()) {
+                double max_weight = -1.0;
+                for (size_t p : tb.predecessors) {
+                    if (tasks[p].weight > max_weight && tasks[p].cluster_id != 255) {
+                        max_weight = tasks[p].weight;
+                        best_cluster = tasks[p].cluster_id;
+                    }
+                }
+            }
+
+            
+            if (best_cluster == 255 || tb.kernel_name.find("bg") != std::string::npos) {
+                auto min_it = std::min_element(cluster_load.begin(), cluster_load.end());
+                best_cluster = static_cast<uint8_t>(std::distance(cluster_load.begin(), min_it));
+            }
+
+            tb.cluster_id = best_cluster;
+            cluster_load[best_cluster] += tb.weight;
+        }
+
+
+
         std::vector<StmtPtr> new_stmts;
-        std::cout << "\n[Final Schedule Order]" << std::endl;
+        std::cout << "\n[Final Schedule Order & AICPU Mapping]" << std::endl;
         for (size_t task_idx : new_order) {
             const auto& tb = tasks[task_idx];
             if (tb.kernel_name != "assign" && tb.kernel_name != "non_assign") {
-                 std::cout << "  -> " << tb.kernel_name << " (rank_u: " << tb.rank_u << ")" << std::endl;
+                 std::cout << "  -> " << tb.kernel_name 
+                           << " (rank_u: " << tb.rank_u 
+                           << ", cluster: " << static_cast<int>(tb.cluster_id) << ")" << std::endl;
             }
+            
             for (size_t stmt_idx = tb.start_idx; stmt_idx <= tb.end_idx; ++stmt_idx) {
-                new_stmts.push_back(stmts[stmt_idx]);
-                std::cout << stmt_idx << " " << stmts[stmt_idx] << std::endl;
+                auto current_stmt = stmts[stmt_idx];
+                
+                
+                if (tb.cluster_id != 255) {
+                    if (auto assign = As<AssignStmt>(current_stmt)) {
+                        if (auto submit = As<Submit>(assign->value_)) {
+                            const_cast<std::optional<uint8_t>&>(submit->aicpu_cluster_id_) = tb.cluster_id; 
+                        }
+                    }
+                }
+                new_stmts.push_back(current_stmt);
             }
         }
 
@@ -197,12 +243,13 @@ public:
 };
 
 Pass NativeHeftScheduler() {
+    int num_clusters = 2;
     return CreateFunctionPass(
-        [](const FunctionPtr& func) -> FunctionPtr {
+        [num_clusters](const FunctionPtr& func) -> FunctionPtr {
             if (func->func_type_ != FunctionType::Orchestration) {
                 return func;
             }
-            HeftSchedulerMutator mutator;
+            HeftSchedulerMutator mutator(num_clusters);
             return mutator.VisitFunction(func);
         },
         "NativeHeftScheduler",

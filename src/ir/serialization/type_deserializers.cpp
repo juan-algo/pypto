@@ -513,8 +513,14 @@ static IRNodePtr DeserializeSubmit(const msgpack::object& fields_obj, msgpack::z
   auto kwargs_obj = GET_FIELD_OBJ("kwargs");
   std::vector<std::pair<std::string, std::any>> kwargs = DeserializeKwargs(kwargs_obj, "kwargs", ctx, zone);
 
+  std::optional<uint8_t> aicpu_cluster_id = std::nullopt;
+  auto aicpu_cluster_obj = GetOptionalFieldObj(fields_obj, "aicpu_cluster_id", ctx);
+  if (aicpu_cluster_obj.has_value() && aicpu_cluster_obj->type != msgpack::type::NIL) {
+    aicpu_cluster_id = static_cast<uint8_t>(aicpu_cluster_obj->via.u64);
+  }
+
   return std::make_shared<Submit>(op, args, deps, std::move(kwargs), std::move(attrs), type, span,
-                                  std::move(core_num), sync_start, allow_early_resolve);
+                                  std::move(core_num), sync_start, allow_early_resolve, aicpu_cluster_id);
 }
 
 // Macro for binary expressions
